@@ -44,6 +44,12 @@ class GridFluidSolver2 : public PhysicsAnimation {
 
     ArrayAccessor2<float> density();
 
+    ArrayAccessor2<float> uSource();
+
+    ArrayAccessor2<float> vSource();
+
+    ArrayAccessor2<float> densitySource();
+
  protected:
     //! Called when advancing a single time-step.
     void onAdvanceTimeStep(double timeIntervalInSeconds) override;

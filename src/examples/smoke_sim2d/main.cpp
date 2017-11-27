@@ -20,15 +20,60 @@
 using namespace jet;
 using namespace viz;
 
+// MARK: Macros
+#define IX(i, j) ((i) + (sN) * (j))
+
 // MARK: Global variables
-static size_t sN = 256 + 2;
-static Frame sFrame{0, 1.0 / 60.0};
-static ExpGridFluidSolver2Ptr sSolver;
-static ImageRenderablePtr sRenderable;
-static ByteImage sImage;
+namespace global {
+
+size_t sN = 256 + 2;
+float sForce, sSource;
+int sDvel;
+
+Frame sFrame{0, 0.1};
+experimental::GridFluidSolver2Ptr sSolver;
+ImageRenderablePtr sRenderable;
+ByteImage sImage;
+
+int sFrameX, sFrameY;
+int sMouseDown[2];
+int sOmx, sOmy, sMx, sMy;
+
+}  // namespace global
+
+// MARK: Relates mouse movements to forces sources
+static void getFromUI(float* d_, float* u_, float* v_) {
+    using namespace global;
+    int N = (int)sN - 2;
+    int i, j, size = (N + 2) * (N + 2);
+
+    for (i = 0; i < size; i++) {
+        u_[i] = v_[i] = d_[i] = 0.0f;
+    }
+
+    if (!sMouseDown[0] && !sMouseDown[1]) return;
+
+    i = (int)((sMx / (float)sFrameX) * N + 1);
+    j = (int)(((sFrameY - sMy) / (float)sFrameY) * N + 1);
+
+    if (i < 1 || i > N || j < 1 || j > N) return;
+
+    if (sMouseDown[0]) {
+        u_[IX(i, j)] = sForce * (sMx - sOmx);
+        v_[IX(i, j)] = sForce * (sOmy - sMy);
+    }
+
+    if (sMouseDown[1]) {
+        d_[IX(i, j)] = sSource;
+    }
+
+    sOmx = sMx;
+    sOmy = sMy;
+}
 
 // MARK: Rendering
 void densityToImage() {
+    using namespace global;
     const auto den = sSolver->density();
     sImage.resize(sN, sN);
     for (size_t i = 0; i < sN; i++) {
@@ -59,20 +104,28 @@ bool onKeyDown(GLFWWindow* win, const KeyEvent& keyEvent) {
 }
 
 bool onPointerPressed(GLFWWindow* win, const PointerEvent& pointerEvent) {
+    using namespace global;
     (void)win;
-    (void)pointerEvent;
+    int button =
+        (pointerEvent.pressedMouseButton() == MouseButtonType::Left) ? 0 : 1;
+    sMouseDown[button] = true;
     return true;
 }
 
 bool onPointerReleased(GLFWWindow* win, const PointerEvent& pointerEvent) {
+    using namespace global;
     (void)win;
-    (void)pointerEvent;
+    int button =
+        (pointerEvent.pressedMouseButton() == MouseButtonType::Left) ? 0 : 1;
+    sMouseDown[button] = false;
     return true;
 }
 
 bool onPointerDragged(GLFWWindow* win, const PointerEvent& pointerEvent) {
+    using namespace global;
     (void)win;
-    (void)pointerEvent;
+    sMx = (int)pointerEvent.x();
+    sMy = (int)pointerEvent.y();
     return true;
 }
 
@@ -81,7 +134,8 @@ bool onGui(GLFWWindow*) {
     ImGui::Begin("Info");
     {
         ImGui::Text("Application average %.3f ms/sFrame (%.1f FPS)",
-                    1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+                    1000.0f / ImGui::GetIO().Framerate,
+                    ImGui::GetIO().Framerate);
     }
     ImGui::End();
     ImGui::Render();
@@ -89,7 +143,16 @@ bool onGui(GLFWWindow*) {
 }
 
 bool onUpdate(GLFWWindow* win) {
-    (void)win;
+    using namespace global;
+
+    const auto fbSize = win->framebufferSize();
+    sFrameX = (int)fbSize.x;
+    sFrameY = (int)fbSize.y;
+
+    float* uSrc = sSolver->uSource().data();
+    float* vSrc = sSolver->vSource().data();
+    float* denSrc = sSolver->densitySource().data();
+    getFromUI(denSrc, uSrc, vSrc);
 
     sSolver->update(sFrame);
     densityToImage();
@@ -100,29 +163,35 @@ bool onUpdate(GLFWWindow* win) {
 }
 
 int main(int, const char**) {
+    using namespace global;
+
     Logging::mute();
 
     GLFWApp::initialize();
 
     // Setup sSolver
-    sSolver = std::make_shared<ExpGridFluidSolver2>();
+    sSolver = std::make_shared<experimental::GridFluidSolver2>();
     sSolver->resizeGrid({sN, sN}, {1.0 / sN, 1.0 / sN}, {0.0, 0.0});
-//    sSolver = GridSmokeSolver2::builder()
-//                  .withResolution({sN, sN})
-//                  .withDomainSizeX(1.0)
-//                  .makeShared();
-//    auto pressureSolver =
-//        std::make_shared<GridFractionalSinglePhasePressureSolver2>();
-//    pressureSolver->setLinearSystemSolver(
-//        std::make_shared<FdmGaussSeidelSolver2>(20, 20, 0.001));
-//    sSolver->setPressureSolver(pressureSolver);
-//    auto sphere =
-//        Sphere2::builder().withCenter({0.5, 0.2}).withRadius(0.15).makeShared();
-//    auto emitter =
-//        VolumeGridEmitter2::builder().withSourceRegion(sphere).makeShared();
-//    sSolver->setEmitter(emitter);
-//    emitter->addStepFunctionTarget(sSolver->smokeDensity(), 0.0, 1.0);
-//    emitter->addStepFunctionTarget(sSolver->temperature(), 0.0, 1.0);
+    sForce = 5.0f;
+    sSource = 100.0f;
+    sDvel = 0;
+    //    sSolver = GridSmokeSolver2::builder()
+    //                  .withResolution({sN, sN})
+    //                  .withDomainSizeX(1.0)
+    //                  .makeShared();
+    //    auto pressureSolver =
+    //        std::make_shared<GridFractionalSinglePhasePressureSolver2>();
+    //    pressureSolver->setLinearSystemSolver(
+    //        std::make_shared<FdmGaussSeidelSolver2>(20, 20, 0.001));
+    //    sSolver->setPressureSolver(pressureSolver);
+    //    auto sphere =
+    //        Sphere2::builder().withCenter({0.5,
+    //        0.2}).withRadius(0.15).makeShared();
+    //    auto emitter =
+    //        VolumeGridEmitter2::builder().withSourceRegion(sphere).makeShared();
+    //    sSolver->setEmitter(emitter);
+    //    emitter->addStepFunctionTarget(sSolver->smokeDensity(), 0.0, 1.0);
+    //    emitter->addStepFunctionTarget(sSolver->temperature(), 0.0, 1.0);
 
     // Create GLFW window
     GLFWWindowPtr window = GLFWApp::createWindow("Smoke Sim 2D", 512, 512);

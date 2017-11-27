@@ -8,8 +8,11 @@
 
 #include <jet/exp_grid_fluid_solver2.h>
 
+#include <jet/core_api_array.h>
+
 using namespace jet;
 using namespace experimental;
+using namespace core;
 
 #define IX(i, j) ((i) + (N + 2) * (j))
 #define FOR_EACH_CELL          \
@@ -22,10 +25,22 @@ using namespace experimental;
 namespace {
 
 void addSource(size_t N, float* x, float* s, float dt) {
-    size_t i, size = (N + 2) * (N + 2);
-    for (i = 0; i < size; i++) {
-        x[i] += dt * s[i];
-    }
+    BufferView xView = BufferViewBuilder()
+                           .withDevice(Device::kIspc)
+                           .withDataType(DataType::kFloat32)
+                           .withBuffer(x)
+                           .withShape({N + 2, N + 2})
+                           .build();
+    BufferView sView =
+        BufferViewBuilder().withView(xView).withBuffer(s).build();
+    BufferView dtView = BufferViewBuilder()
+                            .withView(xView)
+                            .withBuffer(&dt)
+                            .withShape({1})
+                            .build();
+
+    // x = dt * s + x
+    axpy(dtView, sView, xView, &xView);
 }
 
 void setBoundaryCondition(size_t N, size_t b, float* x) {
@@ -147,22 +162,24 @@ void velocityStep(size_t N, float* u, float* v, float* u0, float* v0,
 
 }  // namespace
 
-GridFluidSolver2::GridFluidSolver2() {}
+GridFluidSolver2::GridFluidSolver2() {
+}
 
-GridFluidSolver2::~GridFluidSolver2() {}
+GridFluidSolver2::~GridFluidSolver2() {
+}
 
 void GridFluidSolver2::resizeGrid(const Size2& newSize,
-                                     const Vector2D& newGridSpacing,
-                                     const Vector2D& newGridOrigin) {
+                                  const Vector2D& newGridSpacing,
+                                  const Vector2D& newGridOrigin) {
     UNUSED_VARIABLE(newGridSpacing);
     UNUSED_VARIABLE(newGridOrigin);
 
-    _u.resize(newSize);
-    _uTemp.resize(newSize);
-    _v.resize(newSize);
-    _vTemp.resize(newSize);
-    _den.resize(newSize);
-    _denTemp.resize(newSize);
+    _u.resize(newSize, 0.0f);
+    _uTemp.resize(newSize, 0.0f);
+    _v.resize(newSize, 0.0f);
+    _vTemp.resize(newSize, 0.0f);
+    _den.resize(newSize, 0.0f);
+    _denTemp.resize(newSize, 0.0f);
 }
 
 ConstArrayAccessor2<float> GridFluidSolver2::density() const {
@@ -173,15 +190,23 @@ ArrayAccessor2<float> GridFluidSolver2::density() {
     return _den.accessor();
 }
 
+ArrayAccessor2<float> GridFluidSolver2::uSource() {
+    return _uTemp.accessor();
+}
+
+ArrayAccessor2<float> GridFluidSolver2::vSource() {
+    return _vTemp.accessor();
+}
+
+ArrayAccessor2<float> GridFluidSolver2::densitySource() {
+    return _denTemp.accessor();
+}
+
 void GridFluidSolver2::onAdvanceTimeStep(double timeIntervalInSeconds) {
     size_t N = _u.size().x - 2;
     float visc = 0.0f;
     float diff = 0.0f;
     float dt = (float)timeIntervalInSeconds;
-
-    _uTemp.set(0.0f);
-    _vTemp.set(0.0f);
-    _denTemp.set(0.0f);
 
     velocityStep(N, _u.data(), _v.data(), _uTemp.data(), _vTemp.data(), visc,
                  dt);
